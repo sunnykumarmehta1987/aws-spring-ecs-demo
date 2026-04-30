@@ -1,16 +1,15 @@
-name: Deploy to ECS
+name: Auto Deploy to ECS
 
 on:
-  workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Enter image tag (example: build-7)"
-        required: true
+  push:
+    branches:
+      - main
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   ECS_CLUSTER: my-first-cluster-1
   ECS_SERVICE: spring-app-task-new-service
+  TASK_FAMILY: spring-app-task-new
   ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
 
 jobs:
@@ -18,7 +17,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Configure AWS
+      # 1. Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. AWS login
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -26,18 +29,64 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2. Login to ECR (optional but safe)
+      # 3. Login to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 3. Build image URI
-      - name: Set image URI
+      # 4. Build image with unique tag
+      - name: Build Docker image
         run: |
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${{ github.event.inputs.image_tag }}
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          IMAGE_TAG=build-${{ github.run_number }}
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
 
-      # 4. Deploy to ECS (NO task definition editing)
+      # 5. Tag image for ECR
+      - name: Tag image
+        run: |
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+          ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 6. Push image
+      - name: Push to ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 7. Download task definition
+      - name: Get task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition > task.json
+
+      # 8. Clean AWS metadata (IMPORTANT FIX)
+      - name: Clean task definition
+        run: |
+          jq 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' task.json > clean-task.json
+
+      # 9. Update image in task definition
+      - name: Update image
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${IMAGE_TAG}
+          jq --arg IMAGE "$IMAGE_URI" \
+          '.containerDefinitions[0].image=$IMAGE' \
+          clean-task.json > new-task.json
+
+      # 10. Register new task definition
+      - name: Register task definition
+        run: |
+          aws ecs register-task-definition \
+            --cli-input-json file://new-task.json
+
+      # 11. Deploy ECS service
       - name: Deploy to ECS
         run: |
           aws ecs update-service \
