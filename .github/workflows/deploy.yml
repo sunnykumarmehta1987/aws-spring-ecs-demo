@@ -21,7 +21,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. AWS login
+      # 2. AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -34,14 +34,14 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4. Build image with unique tag
+      # 4. Build image
       - name: Build Docker image
         run: |
           IMAGE_TAG=build-${{ github.run_number }}
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
 
-      # 5. Tag image for ECR
+      # 5. Tag image
       - name: Tag image
         run: |
           docker tag $ECR_REPOSITORY:$IMAGE_TAG \
@@ -52,14 +52,14 @@ jobs:
         run: |
           docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # 7. Download task definition
+      # 7. Get task definition
       - name: Get task definition
         run: |
           aws ecs describe-task-definition \
             --task-definition $TASK_FAMILY \
             --query taskDefinition > task.json
 
-      # 8. Clean AWS metadata (IMPORTANT FIX)
+      # 8. Clean task definition (IMPORTANT)
       - name: Clean task definition
         run: |
           jq 'del(
@@ -72,8 +72,8 @@ jobs:
             .registeredBy
           )' task.json > clean-task.json
 
-      # 9. Update image in task definition
-      - name: Update image
+      # 9. Update image
+      - name: Update image in task definition
         run: |
           IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${IMAGE_TAG}
           jq --arg IMAGE "$IMAGE_URI" \
@@ -84,12 +84,15 @@ jobs:
       - name: Register task definition
         run: |
           aws ecs register-task-definition \
-            --cli-input-json file://new-task.json
+            --cli-input-json file://new-task.json > output.json
 
-      # 11. Deploy ECS service
-      - name: Deploy to ECS
+      # 11. Deploy to ECS (FIXED STEP)
+      - name: Deploy ECS service with new revision
         run: |
+          TASK_DEF_ARN=$(cat output.json | jq -r '.taskDefinition.taskDefinitionArn')
+
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
+            --task-definition $TASK_DEF_ARN \
             --force-new-deployment
