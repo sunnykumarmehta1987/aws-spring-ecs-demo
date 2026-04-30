@@ -1,41 +1,60 @@
-name: Build and Push Docker Image to ECR
+name: Deploy to ECS
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Enter image tag (example: build-7)'
+        required: true
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECS_CLUSTER: my-first-cluster-1
+  ECS_SERVICE: spring-app-task-new-service
+  ECS_TASK_DEFINITION: spring-app-task-new
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Docker image
+      - name: Set image URI
         run: |
-          IMAGE_TAG=${{ github.sha }}
-          docker build  --no-cache -t ${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG .
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${{ github.event.inputs.image_tag }}
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-      - name: Tag Docker image
+      - name: Download current task definition
         run: |
-          IMAGE_TAG=${{ github.sha }}
-          docker tag ${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG \
-          ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
+          aws ecs describe-task-definition \
+            --task-definition $ECS_TASK_DEFINITION \
+            --query taskDefinition > task.json
 
-      - name: Push Docker image to ECR
+      - name: Update image in task definition
         run: |
-          IMAGE_TAG=${{ github.sha }}
-          docker push ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
+          jq --arg IMAGE "$IMAGE_URI" \
+          '.containerDefinitions[0].image=$IMAGE' \
+          task.json > new-task.json
+
+      - name: Register new task definition
+        run: |
+          aws ecs register-task-definition \
+            --cli-input-json file://new-task.json
+
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --force-new-deployment
