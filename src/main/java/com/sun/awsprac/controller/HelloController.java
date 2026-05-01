@@ -10,7 +10,7 @@ public class HelloController {
 
     @GetMapping("/hello")
     public String hello() {
-        return "hello words updated deployment  version 3.0";
+        return "hello words updated deployment  version 4.0";
     }
 
     @GetMapping("/hellow")
