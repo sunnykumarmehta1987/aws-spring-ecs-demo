@@ -9,16 +9,14 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECS_CLUSTER: my-first-cluster-1
-  ECS_SERVICE: spring-app-task-new-service
   TASK_FAMILY: spring-app-task-new
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. AWS Login
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -26,47 +24,41 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to ECR
+      # 2. Fetch infra values from SSM (NO MANUAL VALUES)
+      - name: Fetch infra values from SSM
+        run: |
+          ECS_CLUSTER=$(aws ssm get-parameter \
+            --name "/myapp/ecs_cluster_name" \
+            --query "Parameter.Value" \
+            --output text)
+
+          ECS_SERVICE=$(aws ssm get-parameter \
+            --name "/myapp/ecs_service_name" \
+            --query "Parameter.Value" \
+            --output text)
+
+          ECR_REPOSITORY=$(aws ssm get-parameter \
+            --name "/myapp/ecr_repo_name" \
+            --query "Parameter.Value" \
+            --output text)
+
+          echo "ECS_CLUSTER=$ECS_CLUSTER" >> $GITHUB_ENV
+          echo "ECS_SERVICE=$ECS_SERVICE" >> $GITHUB_ENV
+          echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
+
+      # 3. Login to ECR (optional but fine to keep)
+      - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Get task definition
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition $TASK_FAMILY \
-            --query taskDefinition > task.json
-
-      - name: Clean task definition
-        run: |
-          jq 'del(
-            .taskDefinitionArn,
-            .revision,
-            .status,
-            .requiresAttributes,
-            .compatibilities,
-            .registeredAt,
-            .registeredBy
-          )' task.json > clean-task.json
-
-      - name: Update image
+      # 4. FORCE DEPLOY (NO TASK DEF REBUILD)
+      - name: Deploy to ECS
         run: |
           IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${{ github.event.inputs.image_tag }}
 
-          jq --arg IMAGE "$IMAGE_URI" \
-          '.containerDefinitions[0].image=$IMAGE' \
-          clean-task.json > new-task.json
-
-      - name: Register task definition
-        run: |
-          aws ecs register-task-definition \
-            --cli-input-json file://new-task.json > output.json
-
-      - name: Deploy to ECS
-        run: |
-          TASK_DEF_ARN=$(cat output.json | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "Deploying image: $IMAGE_URI"
 
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
-            --task-definition $TASK_DEF_ARN \
             --force-new-deployment
