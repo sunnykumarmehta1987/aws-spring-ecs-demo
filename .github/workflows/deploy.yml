@@ -23,25 +23,24 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2. Fetch values from SSM (WITH DEBUG)
+      # 2. Fetch values from SSM (FIXED)
       - name: Fetch infra values from SSM
         run: |
           set -e
 
           get_param () {
             NAME=$1
-            echo "Fetching parameter: $NAME"
+            echo "Fetching parameter: $NAME" >&2
 
             VALUE=$(aws ssm get-parameter \
               --name "$NAME" \
               --query "Parameter.Value" \
-              --output text 2>&1) || {
-                echo "❌ Failed to fetch: $NAME"
-                echo "$VALUE"
+              --output text 2>/dev/null) || {
+                echo "❌ Failed to fetch: $NAME" >&2
                 exit 1
               }
 
-            echo "✅ Success: $NAME"
+            echo "✅ Success: $NAME" >&2
             echo "$VALUE"
           }
 
@@ -76,7 +75,7 @@ jobs:
             --query taskDefinition \
             --output json)
 
-          NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$IMAGE_URI" '
+          NEW_TASK_DEF=$(echo "$TASK_DEF" | jq --arg IMAGE "$IMAGE_URI" '
             .containerDefinitions[0].image=$IMAGE
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
           ')
