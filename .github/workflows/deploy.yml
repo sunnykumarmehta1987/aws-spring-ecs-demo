@@ -9,7 +9,6 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  TASK_FAMILY: spring-app-task-new   # change if needed
 
 jobs:
   deploy:
@@ -41,7 +40,13 @@ jobs:
             --name "/dev/ecommerce/ecr_repo_name" \
             --query "Parameter.Value" \
             --output text)
-
+          
+          TASK_FAMILY=$(aws ssm get-parameter \
+            --name "/dev/ecommerce/task_family" \
+            --query "Parameter.Value" \
+            --output text)
+  
+         echo "TASK_FAMILY=$TASK_FAMILY" >> $GITHUB_ENV
           echo "ECS_CLUSTER=$ECS_CLUSTER" >> $GITHUB_ENV
           echo "ECS_SERVICE=$ECS_SERVICE" >> $GITHUB_ENV
           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
