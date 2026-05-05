@@ -10,7 +10,13 @@ public class HelloController {
 
     @GetMapping("/hello")
     public String hello() {
-        return "hello words updated deployment  version 4.0";
+        LocalDateTime now = LocalDateTime.now();
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+        long timestamp = System.currentTimeMillis();
+        return "Latest deployment at: " + now.format(formatter) +
+               " | Timestamp: " + timestamp +
+               " | Response ID: " + java.util.UUID.randomUUID().toString().substring(0, 8) +
+               " | Version 4.1";
     }
 
     @GetMapping("/hellow")
