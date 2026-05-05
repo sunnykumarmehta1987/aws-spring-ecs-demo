@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Select image tag (example: build-12)"
+        description: "Enter image tag (example: build-12)"
         required: true
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  TASK_FAMILY: spring-app-task-new
+  TASK_FAMILY: spring-app-task-new   # change if needed
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. AWS Login
+      # 1. Configure AWS
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -24,21 +24,21 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2. Fetch infra values from SSM (NO MANUAL VALUES)
+      # 2. Fetch values from SSM (FIXED PATHS)
       - name: Fetch infra values from SSM
         run: |
           ECS_CLUSTER=$(aws ssm get-parameter \
-            --name "/myapp/ecs_cluster_name" \
+            --name "/dev/ecommerce/ecs_cluster_name" \
             --query "Parameter.Value" \
             --output text)
 
           ECS_SERVICE=$(aws ssm get-parameter \
-            --name "/myapp/ecs_service_name" \
+            --name "/dev/ecommerce/ecs_service_name" \
             --query "Parameter.Value" \
             --output text)
 
           ECR_REPOSITORY=$(aws ssm get-parameter \
-            --name "/myapp/ecr_repo_name" \
+            --name "/dev/ecommerce/ecr_repo_name" \
             --query "Parameter.Value" \
             --output text)
 
@@ -46,19 +46,44 @@ jobs:
           echo "ECS_SERVICE=$ECS_SERVICE" >> $GITHUB_ENV
           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
 
-      # 3. Login to ECR (optional but fine to keep)
+      # 3. Login to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4. FORCE DEPLOY (NO TASK DEF REBUILD)
+      # 4. Install jq (needed for JSON update)
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # 5. Deploy (update task definition with new image)
       - name: Deploy to ECS
         run: |
           IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${{ github.event.inputs.image_tag }}
 
           echo "Deploying image: $IMAGE_URI"
 
+          # Get current task definition
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition \
+            --output json)
+
+          # Update container image
+          NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "$IMAGE_URI" '
+            .containerDefinitions[0].image=$IMAGE
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+          ')
+
+          # Register new revision
+          NEW_REVISION=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "New task definition: $NEW_REVISION"
+
+          # Update service
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
-            --force-new-deployment
+            --task-definition $NEW_REVISION

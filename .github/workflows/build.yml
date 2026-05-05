@@ -7,7 +7,6 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  #ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
 
 jobs:
   build:
@@ -31,16 +30,17 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # 4. Fetch ECR repo name from SSM (FIXED PATH)
       - name: Fetch ECR repo from SSM
         run: |
           ECR_REPOSITORY=$(aws ssm get-parameter \
-            --name "/myapp/ecr_repo_name" \
+            --name "/dev/ecommerce/ecr_repo_name" \
             --query "Parameter.Value" \
             --output text)
 
           echo "ECR_REPOSITORY=$ECR_REPOSITORY" >> $GITHUB_ENV
 
-      # 4. Build Docker image
+      # 5. Build Docker image
       - name: Build Docker image
         run: |
           IMAGE_TAG=build-${{ github.run_number }}
@@ -48,23 +48,23 @@ jobs:
 
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
 
-      # 5. Tag Docker image for ECR
+      # 6. Tag Docker image for ECR
       - name: Tag Docker image
         run: |
           docker tag $ECR_REPOSITORY:$IMAGE_TAG \
           ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # 6. Push Docker image to ECR
-      - name: Push Docker image to ECR
+      # 7. Push Docker image to ECR
+      - name: Push Docker image
         run: |
           docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # 7. Show image in GitHub Actions UI
-      - name: Show built image in UI
+      # 8. Show image details
+      - name: Show image in UI
         run: |
           IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
 
-          echo "### 🚀 Build Successful" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image pushed to ECR:**" >> $GITHUB_STEP_SUMMARY
+          echo "Image pushed to ECR:" >> $GITHUB_STEP_SUMMARY
           echo "\`${IMAGE_URI}\`" >> $GITHUB_STEP_SUMMARY
